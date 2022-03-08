@@ -1,0 +1,411 @@
+<!doctype html>
+<html>
+    <head>
+        <title>DH convention to URDF</title>
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.19.1/full/pyodide.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" integrity="sha512-dLxUelApnYxpLt6K2iomGngnHO83iUvZytA3YjDUCjT0HDOHKXnVYdf3hU4JjM8uEhxf9nD1/ey98U3t2vZ0qQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+        <script src="https://cdn.plot.ly/plotly-2.9.0.min.js"></script>
+    </head>
+    <body>
+        <style>
+         body {
+             margin: 0px 8px;
+         }
+         table {
+             border-collapse: collapse;
+         }
+         tr {
+             border-top: 1px solid rgba(200, 200, 200, 1.0);
+             border-bottom: 1px solid rgba(200, 200, 200, 1.0);
+         }
+         td, th {
+             padding: 2px 8px;
+         }
+         div.grid-wrapper{
+             display: grid;
+             grid-template-columns: 1fr 1fr 2fr;
+             height: calc(100vh - 24px);
+         }
+         div.plot-box {
+             grid-column-start: 3;
+             grid-column-end: 4;
+             grid-row-start: 1;
+             grid-row-end: 3;
+         }
+         div.urdf-box{
+             grid-column-start: 1;
+             grid-column-end: 3;
+             height: 50vh;
+         }
+         div#plot {
+             height: 100%;
+             width: 50vw;
+         }
+         div.text-box {
+             height: 50vh;
+         }
+         div.table-box {
+             height: 50vh;
+         }
+         textarea#dh-input {
+             width: calc(100% - 16px);
+             height: calc(100% - 64px);
+         }
+        </style>
+        <div class="grid-wrapper">
+            <div class="text-box">
+                <h3>DH input</h3>
+                <button id="complete-dh">Visualize</button>
+                <textarea id="dh-input" rows="10" ></textarea>
+            </div>
+            <div class="table-box">
+                <h3>DH table</h3>
+                <table id="dh-table">
+                    <thead>
+                        <tr>
+                            <th>θ</th>
+                            <th>d</th>
+                            <th>α</th>
+                            <th>a</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="plot-box">
+                <div id="plot">
+                </div>
+            </div>
+            <div class="urdf-box">
+                <h3>URDF</h3>
+                <button id="create-urdf">Create URDF</button>
+                <div style="height: 70%;">
+                    <div id="urdf-content" style="white-space: pre; height: 100%; overflow-y: scroll;"></div>
+                </div>
+                <div id="urdf-status"></div>
+            </div>
+        </div>
+        <script>
+         const updateDHTable = (csvContent) => {
+             let tbodyElement = document.getElementById("dh-table").getElementsByTagName("tbody")[0];
+             tbodyElement.innerHTML = "";
+             for(let line of csvContent.split('\n')){
+                 if (line.trim() === "") continue;
+                 let rowElement = document.createElement("tr");
+                 for(let entry of line.split(',')){
+                     let tdElement = document.createElement("td");
+                     tdElement.innerText = entry.trim();
+                     rowElement.appendChild(tdElement);
+                 }
+                 tbodyElement.appendChild(rowElement);
+             }
+         }
+         const updateDHPlot = () => {
+             const dhContent = document.getElementById("dh-input").value;
+             updateDHTable(dhContent);
+             const dhDict = [];
+             const keys = ["theta", "d", "alpha", "a"];
+             for(let line of dhContent.split('\n')){
+                 if (line.trim() === "") continue;
+                 let i = 0;
+                 let dhParams = {};
+                 for(let entry of line.split(',')){
+                     if (i >= 4) continue;
+                     dhParams[keys[i]] = parseFloat(entry.trim());
+                     i += 1;
+                 }
+                 dhDict.push(dhParams);
+             }
+             console.log(dhDict);
+             visualizeDH(dhDict);
+         }
+         document.getElementById("dh-input").oninput = (element) => {
+             const dhContent = document.getElementById("dh-input").value;
+             updateDHTable(dhContent);
+             // updateDHPlot();
+         }
+         document.getElementById("complete-dh").addEventListener("click", () => {
+             updateDHPlot();
+         });
+         const matmul = (a, b) =>{
+             let product = [];
+             for(let i=0; i<a.length; i++){
+                 let row = [];
+                 for(let j=0; j<b[0].length; j++){
+                     let sum = 0;
+                     for(let k=0; k<a[i].length; k++){
+                         sum += a[i][k] * b[k][j];
+                     }
+                     row.push(sum);
+                 }
+                 product.push(row);
+             }
+             return product;
+         }
+         const rot_x = (angle) => {
+             return [
+                 [1, 0, 0, 0],
+                 [0, Math.cos(angle), -Math.sin(angle), 0],
+                 [0, Math.sin(angle), Math.cos(angle), 0],
+                 [0, 0, 0, 1]
+             ];
+         }
+         const rot_z = (angle) => {
+             return [
+                 [Math.cos(angle), -Math.sin(angle), 0, 0],
+                 [Math.sin(angle), Math.cos(angle), 0, 0],
+                 [0, 0, 1, 0],
+                 [0, 0, 0, 1]
+             ];
+         }
+         const translate_x = (length) => {
+             return [
+                 [1, 0, 0, length],
+                 [0, 1, 0, 0],
+                 [0, 0, 1, 0],
+                 [0, 0, 0, 1]
+             ];
+         }
+
+         const translate_z = (length) => {
+             return [
+                 [1, 0, 0, 0],
+                 [0, 1, 0, 0],
+                 [0, 0, 1, length],
+                 [0, 0, 0, 1]
+             ];
+         }
+         const dhSample = [
+             {d: 5, alpha: 90, a: 0},
+             {d: 0, alpha: 0, a: 10},
+             {d: 0, alpha: 0, a: 7},
+             {d: 0, alpha: 0, a: 4},
+         ];
+         const deg2rad = (angle) => {
+             return angle * Math.PI / 180
+         }
+         const getTransform = (dhParams) => {
+             return matmul(
+                 rot_z(deg2rad(dhParams["theta"])),
+                 matmul(
+                     translate_z(dhParams["d"]),
+                     matmul(
+                         translate_x(dhParams["a"]),
+                         rot_x(deg2rad(dhParams["alpha"])),
+                     )
+             ));
+         }
+         const visualizeDH = (dh) => {
+            let data = [];
+            let r = [[1, 0, 0, 0],[0, 1, 0, 0],[ 0, 0, 1, 0], [0, 0, 0, 1]];
+            let xRange = [0, 0];
+            let yRange = [0, 0];
+            let zRange = [0, 0];
+                const addAxisToPlot = (axisOrigin, axisPosition, c, name) => {
+                    xRange[0] = Math.min(xRange[0], axisOrigin[0][0], axisPosition[0][0]);
+                    xRange[1] = Math.max(xRange[1], axisOrigin[0][0], axisPosition[0][0]);
+                    yRange[0] = Math.min(yRange[0], axisOrigin[1][0], axisPosition[1][0]);
+                    yRange[1] = Math.max(yRange[1], axisOrigin[1][0], axisPosition[1][0]);
+                    zRange[0] = Math.min(zRange[0], axisOrigin[2][0], axisPosition[2][0]);
+                    zRange[1] = Math.max(zRange[1], axisOrigin[2][0], axisPosition[2][0]); 
+                    data.push(
+                        {
+                            type: "scatter3d",
+                            mode: "lines",
+                            x: [axisOrigin[0][0], axisPosition[0][0]],
+                            y: [axisOrigin[1][0], axisPosition[1][0]],
+                            z: [axisOrigin[2][0], axisPosition[2][0]],
+                            line: {
+                                color: c,
+                                width: 1,
+                            },
+                            name: name,
+                        }
+                    );
+                }
+             let dhIndex = 0;
+            for(let dhParam of dh){
+                dhIndex += 1;
+                const transform = getTransform(dhParam);
+                console.log(transform);
+                const axisOrigin = matmul(r, [[0],[0],[0],[1]]);
+                const axisX = matmul(r, [[1], [0], [0], [1]]);
+                const axisY = matmul(r, [[0], [1], [0], [1]]);
+                const axisZ = matmul(r, [[0], [0], [1], [1]]);
+                addAxisToPlot(axisOrigin, axisX, "#FF0000", `${dhIndex} x`);
+                addAxisToPlot(axisOrigin, axisY, "#00FF00", `${dhIndex} y`);
+                addAxisToPlot(axisOrigin, axisZ, "#0000FF", `${dhIndex} z`);
+                r = matmul(r, transform);
+            }
+             const eeOrigin = matmul(r, [[0], [0], [0], [1]]);
+             const eeX = matmul(r, [[1], [0], [0], [1]]);
+             const eeY = matmul(r, [[0], [1], [0], [1]]);
+             const eeZ = matmul(r, [[0], [0], [1], [1]]);
+             addAxisToPlot(eeOrigin, eeX, "#FF0000", `${dh.length} x`);
+             addAxisToPlot(eeOrigin, eeY, "#00FF00", `${dh.length} y`);
+             addAxisToPlot(eeOrigin, eeZ, "#0000FF", `${dh.length} z`);
+            let xRangeWidth = xRange[1] - xRange[0];
+            let yRangeWidth = yRange[1] - yRange[0];
+            let zRangeWidth = zRange[1] - zRange[0];
+            let maxRangeWidth = Math.max(xRangeWidth, yRangeWidth, zRangeWidth);
+            let rangeMargin = 0.3;
+            let layout = {
+                scene: {
+                    aspectmode: "manual",
+                    aspectratio: {
+                        x: 1, y: 1 , z:1,
+                    },
+                    xaxis: {
+                        range: [
+                            xRange[0] - rangeMargin,
+                            xRange[0] + maxRangeWidth + rangeMargin,
+                        ]
+                    },
+                    yaxis: {
+                        range: [
+                            yRange[0] - rangeMargin,
+                            yRange[0] + maxRangeWidth + rangeMargin
+                        ]
+                    },
+                    zaxis: {
+                        range: [
+                            zRange[0] - rangeMargin,
+                            zRange[0] + maxRangeWidth + rangeMargin
+                        ]
+                    }
+                },
+                // width: 1000, height: 1000,
+                width: document.getElementById("plot").getBoundingClientRect().width,
+                height: document.getElementById("plot").getBoundingClientRect().height,
+            };
+            Plotly.newPlot("plot", data, layout);
+         }
+         updateDHPlot();
+         async function main(){
+             let pyodide = await loadPyodide(
+                 {
+                     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.19.1/full/"
+                 }
+             );
+             const dhDict = [];
+             const keys = ["theta", "d", "alpha", "a"];
+             const dhContent = document.getElementById("dh-input").value;
+             for(let line of dhContent.split('\n')){
+                 if (line.trim() === "") continue;
+                 let i = 0;
+                 let dhParams = {};
+                 for(let entry of line.split(',')){
+                     if (i >= 4) continue;
+                     dhParams[keys[i]] = parseFloat(entry.trim());
+                     i += 1;
+                 }
+                 dhDict.push(dhParams);
+             }
+             const urdfStatus = document.getElementById("urdf-status");
+             const urdfContent = pyodide.runPython(
+                     `
+from typing import Dict
+import xml
+import xml.dom.minidom
+import xml.etree.ElementTree
+
+
+def add_box_visual(element, x_width, y_width, z_height, origin_by):
+    visual_e = xml.etree.ElementTree.SubElement(element, "visual")
+    geometry_e = xml.etree.ElementTree.SubElement(visual_e, "geometry")
+    box_e = xml.etree.ElementTree.SubElement(geometry_e, "box")
+    box_e.set("size", f"{x_width} {y_width} {z_height}")
+    origin_e = xml.etree.ElementTree.SubElement(visual_e, "origin")
+    if origin_by == "z":
+        origin_e.set("xyz", f"0 0 {z_height/2}")
+    elif origin_by == "x":
+        origin_e.set("xyz", f"{x_width/2} 0 0")
+    origin_e.set("rpy", "0 0 0")
+
+
+def add_et_subtrees(parent_et, subtree_attributes: Dict):
+    for subtree_attribute in subtree_attributes:
+        subtree_e = xml.etree.ElementTree.SubElement(parent_et, subtree_attribute)
+        for attr in subtree_attributes[subtree_attribute]:
+            subtree_e.set(attr, subtree_attributes[subtree_attribute][attr])
+
+def angle_to_radian(angle):
+    return  3.1415926 * angle/180.0
+
+def dh_to_urdf(dh):
+    urdf_et = xml.etree.ElementTree.Element("robot")
+    urdf_et.set("name", "robot")
+    base_link = xml.etree.ElementTree.SubElement(urdf_et, "link")
+    base_link.set("name", "L-0")
+    add_box_visual(base_link, 1, 1, 3, "z")
+    width = 1.0
+    next_joint_origin = {
+        "xpy": "0 0 3",
+        "rpy": "0 0 0"
+    }
+    for link_index, dh_params in enumerate(dh):
+        link_et = xml.etree.ElementTree.SubElement(urdf_et, "link")
+        link_et.set("name", f"L-{link_index + 1}")
+        if dh_params["d"] > dh_params["a"]:
+            add_box_visual(link_et, width, width, dh_params["d"], "z")
+        else:
+            add_box_visual(link_et, dh_params["a"], width, width, "x")
+        # if link_index == len(dh)-1:
+        #     break
+        joint_et = xml.etree.ElementTree.SubElement(urdf_et, "joint")
+        joint_et.set("name", f"J-{link_index + 1}")
+        joint_et.set("type", "revolute")
+        add_et_subtrees(
+            joint_et,
+            {
+                "parent": {"link": f"L-{link_index}"},
+                "child": {"link": f"L-{link_index+1}"},
+                "origin": next_joint_origin,
+                "axis": {
+                    "xyz": "0 0 1"
+                },
+                "limit": {
+                    "effort": "1000",
+                    "lower": "-2",
+                    "upper": "2.0",
+                    "velocity": "0.5"
+                }
+            }
+        )
+        next_joint_origin = {
+            "xyz": f"{dh_params['a']} 0 {dh_params['d']}",
+            "rpy": f"{angle_to_radian(dh_params['alpha'])} 0 0",
+        }
+    # return xml.etree.ElementTree.dump(urdf_et)
+    # xml.etree.ElementTree.dump(urdf_et)
+    return urdf_et
+
+def dh_to_urdf_string(dh):
+    return xml.etree.ElementTree.tostring(
+        dh_to_urdf(dh)
+    )
+def xml_format(xml_content):
+    dom = xml.dom.minidom.parseString(xml_content)
+    return dom.toprettyxml()
+
+
+urdf = xml_format(dh_to_urdf_string(
+${JSON.stringify(dhDict)}
+))
+# import js
+# js.document.getElementById('urdf-content').innerText = urdf
+str(urdf)
+                     `)
+             console.log(urdfContent);
+             document.getElementById("urdf-content").innerText = urdfContent;
+             urdfStatus.innerText = "complete";
+         }
+         document.getElementById("create-urdf").addEventListener("click", () =>{
+             const urdfStatus = document.getElementById("urdf-status");
+             urdfStatus.innerText = "loading";
+             main();
+         });
+         // main();
+        </script>
+    </body>
+</html>
