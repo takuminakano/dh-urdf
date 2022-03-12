@@ -1,3 +1,4 @@
+import argparse
 from typing import Dict
 import xml
 # import lxml.etree
@@ -87,22 +88,39 @@ def xml_format(xml_content):
     dom = xml.dom.minidom.parseString(xml_content)
     return dom.toprettyxml()
 
-
-if __name__ == "__main__":
-    with open("./robot.yaml") as f:
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--robot-yaml",
+        help="path to robot.yaml"
+    )
+    parser.add_argument("--ouptut", "-o", required=True, help="output path(***.urdf)")
+    args = parser.parse_args()
+    with open(args.robot_yaml) as f:
         content = safe_load(f)
         et = dh_to_urdf(content)
         tree = xml.etree.ElementTree.ElementTree(et)
-        # tree.write("./robot2.urdf")
-        # print(xml.etree.ElementTree.tostring(et))
-        # print(lxml.etree.)
-        # with open("./robot2.urdf", "w") as o:
-        # tree = lxml.etree.ElementTree(lxml.etree.fromstring(xml.etree.ElementTree.tostring(et)))
-        # print(tree)
-        formatted_xml = xml_format(
-            xml.etree.ElementTree.tostring(et)
-        )
-        print(formatted_xml)
-        with open("./robot2.urdf", "w") as output_f:
-            output_f.write(formatted_xml)
-        # tree.write("./robot2.urdf", pretty_print = True)
+        formatted_xml = xml_format(xml.etree.ElementTree.tostring(et))
+        with open(args.output) as o_f:
+            o_f.write(formatted_xml)
+
+
+if __name__ == "__main__":
+    main()
+    # with open("./robot.yaml") as f:
+    #     content = safe_load(f)
+    #     et = dh_to_urdf(content)
+    #     tree = xml.etree.ElementTree.ElementTree(et)
+    #     # tree.write("./robot2.urdf")
+    #     # print(xml.etree.ElementTree.tostring(et))
+    #     # print(lxml.etree.)
+    #     # with open("./robot2.urdf", "w") as o:
+    #     # tree = lxml.etree.ElementTree(lxml.etree.fromstring(xml.etree.ElementTree.tostring(et)))
+    #     # print(tree)
+    #     formatted_xml = xml_format(
+    #         xml.etree.ElementTree.tostring(et)
+    #     )
+    #     print(formatted_xml)
+    #     with open("./robot2.urdf", "w") as output_f:
+    #         output_f.write(formatted_xml)
+    #     # tree.write("./robot2.urdf", pretty_print = True)
